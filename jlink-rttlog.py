@@ -1,9 +1,45 @@
 import argparse
+import ctypes
+import msvcrt
 import os
 import sys
 import pylink
 import time
 from datetime import datetime
+
+_shutdown = False
+
+
+def _should_exit():
+    if _shutdown:
+        return True
+    if not msvcrt.kbhit():
+        return False
+    return msvcrt.getch() in (b'\x03', b'\x1a')
+
+
+if sys.platform == 'win32':
+    _HR = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
+
+    @_HR
+    def _on_close(ctrl_type):
+        global _shutdown
+        _shutdown = True
+        return True
+
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(_on_close, True)
+
+
+def _cleanup():
+    print("\nShutting down...")
+    try:
+        jlink.rtt_stop()
+    except Exception:
+        pass
+    try:
+        jlink.close()
+    except Exception:
+        pass
 
 
 def parse_args():
@@ -108,6 +144,8 @@ def rtt_auto_reconnect(serial, args):
             # 2. start RTT and wait for control block detection
             jlink.rtt_start()
             for _ in range(30):  # up to 3 seconds
+                if _should_exit():
+                    return _cleanup()
                 try:
                     if jlink.rtt_get_num_up_buffers() > 0:
                         print("RTT control block found, ready.")
@@ -124,6 +162,9 @@ def rtt_auto_reconnect(serial, args):
 
             # 4. read loop
             while True:
+                if _should_exit():
+                    return _cleanup()
+
                 # check target voltage
                 try:
                     v = jlink.hardware_status.voltage
@@ -153,6 +194,9 @@ def rtt_auto_reconnect(serial, args):
 
                 time.sleep(args.interval)
 
+        except KeyboardInterrupt:
+            print()
+            break
         except Exception as e:
             err = str(e)
             if 'already open' in err.lower():
@@ -172,11 +216,15 @@ def rtt_auto_reconnect(serial, args):
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    try:
+        args = parse_args()
 
-    emulators = list_emulators()
-    if not emulators:
-        exit(1)
+        emulators = list_emulators()
+        if not emulators:
+            exit(1)
 
-    serial = select_jlink(emulators, args.serial)
-    rtt_auto_reconnect(serial, args)
+        serial = select_jlink(emulators, args.serial)
+        rtt_auto_reconnect(serial, args)
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        _cleanup()
