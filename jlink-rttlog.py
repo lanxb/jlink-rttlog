@@ -151,7 +151,7 @@ def rtt_auto_reconnect(serial, args):
 
             # 2. start RTT and wait for control block detection
             jlink.rtt_start()
-            for _ in range(30):  # up to 3 seconds
+            for _ in range(60):  # up to 6 seconds
                 if _should_exit():
                     return _cleanup()
                 try:
