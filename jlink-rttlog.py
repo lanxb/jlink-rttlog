@@ -1,4 +1,6 @@
 import argparse
+import os
+import sys
 import pylink
 import time
 from datetime import datetime
@@ -73,10 +75,19 @@ def select_jlink(emulators, target_serial):
     return serial
 
 
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+LOG_DIR = os.path.join(BASE_DIR, 'logs')
+
+
 def make_log_filename(args, serial_number):
-    """Generate log filename: rtt_{chip}_{iface}_{serial}_{timestamp}.log"""
+    """Generate log path: logs/rtt_{chip}_{iface}_{serial}_{timestamp}.log"""
+    os.makedirs(LOG_DIR, exist_ok=True)
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    return f'rtt_{args.chip}_{args.interface}_{serial_number}_{ts}.log'
+    return os.path.join(LOG_DIR, f'rtt_{args.chip}_{args.interface}_{serial_number}_{ts}.log')
 
 
 def rtt_auto_reconnect(serial, args):
