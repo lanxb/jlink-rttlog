@@ -25,9 +25,18 @@ if sys.platform == 'win32':
     def _on_close(ctrl_type):
         global _shutdown
         _shutdown = True
-        return True
+        return True if ctrl_type == 2 else False  # 2 = CTRL_CLOSE_EVENT
 
     ctypes.windll.kernel32.SetConsoleCtrlHandler(_on_close, True)
+
+    # disable Quick Edit mode to prevent click-to-pause
+    _STD_INPUT_HANDLE = -10
+    _ENABLE_QUICK_EDIT_MODE = 0x0040
+    _ENABLE_EXTENDED_FLAGS = 0x0080
+    h_in = ctypes.windll.kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+    mode = ctypes.c_ulong()
+    ctypes.windll.kernel32.GetConsoleMode(h_in, ctypes.byref(mode))
+    ctypes.windll.kernel32.SetConsoleMode(h_in, mode.value & ~_ENABLE_QUICK_EDIT_MODE)
 
 
 def _cleanup():
@@ -86,7 +95,6 @@ def list_emulators():
     """List all connected J-Link devices."""
     emulators = jlink.connected_emulators()
     if not emulators:
-        print("[!] No J-Link devices detected")
         return []
     print(f"\nFound {len(emulators)} J-Link device(s):")
     for i, emu in enumerate(emulators):
@@ -220,8 +228,13 @@ if __name__ == "__main__":
         args = parse_args()
 
         emulators = list_emulators()
-        if not emulators:
-            exit(1)
+        while not emulators:
+            if _should_exit():
+                print("\nCancelled.")
+                exit(0)
+            print("Waiting for J-Link... (Ctrl+C to exit)")
+            time.sleep(2)
+            emulators = list_emulators()
 
         serial = select_jlink(emulators, args.serial)
         rtt_auto_reconnect(serial, args)
