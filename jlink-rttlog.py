@@ -193,7 +193,17 @@ def rtt_auto_reconnect(serial, args):
                 try:
                     data = jlink.rtt_read(args.rtt_buffer, 1024)
                 except Exception:
-                    data = []
+                    print("Connection lost, reconnecting...")
+                    try:
+                        jlink.rtt_stop()
+                    except Exception:
+                        pass
+                    try:
+                        jlink.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+                    break  # reconnect
                 if data:
                     text = bytes(data).decode('utf-8', errors='replace')
                     print(text, end='', flush=True)
