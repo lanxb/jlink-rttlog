@@ -105,8 +105,18 @@ def rtt_auto_reconnect(serial, args):
             jlink.connect(args.chip, speed=args.speed)
             print(f"Connected ({args.chip}, {args.interface.upper()}, {args.speed}kHz). Starting RTT...")
 
-            # 2. start RTT (MUST re-start after every reconnect)
+            # 2. start RTT and wait for control block detection
             jlink.rtt_start()
+            for _ in range(30):  # up to 3 seconds
+                try:
+                    if jlink.rtt_get_num_up_buffers() > 0:
+                        print("RTT control block found, ready.")
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.1)
+            else:
+                print("RTT control block not found, will keep trying...")
 
             # 3. create a new log file on each reconnect
             log_filename = make_log_filename(args, serial)
@@ -131,7 +141,10 @@ def rtt_auto_reconnect(serial, args):
                     break  # exit inner loop, outer loop will reconnect
 
                 # read RTT data (non-blocking, returns empty list if no data)
-                data = jlink.rtt_read(args.rtt_buffer, 1024)
+                try:
+                    data = jlink.rtt_read(args.rtt_buffer, 1024)
+                except Exception:
+                    data = []
                 if data:
                     text = bytes(data).decode('utf-8', errors='replace')
                     print(text, end='', flush=True)
