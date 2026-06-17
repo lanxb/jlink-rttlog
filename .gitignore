@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+dist/
+*.spec
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# RTT logs
+rtt_*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OpenCode internal
+.omo/
