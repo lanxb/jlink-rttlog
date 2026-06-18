@@ -1,6 +1,14 @@
 # J-Link RTT Logger
 
+[![Build & Release](https://github.com/lanxb/jlink-rttlog/actions/workflows/build.yml/badge.svg)](https://github.com/lanxb/jlink-rttlog/actions/workflows/build.yml)
+
 RTT log capture with auto-reconnect on target power loss. Prints to console and writes to timestamped log files.
+
+## Download
+
+Pre-built EXE available on the [Releases](https://github.com/lanxb/jlink-rttlog/releases) page.
+
+> Requires Segger J-Link Software Pack installed on the target machine.
 
 ## Quick Start
 
@@ -30,24 +38,54 @@ jlink-rttlog.py [-h] [-s SERIAL] [-i {swd,jtag}] [-c CHIP]
 | `-i`, `--interface` | `swd` | Target interface: `swd` or `jtag` |
 | `-c`, `--chip` | `GD32F303VG` | Target chip name |
 | `--speed` | `4000` | Interface speed (kHz) |
-| `--threshold` | `500` | Power-loss voltage threshold (mV) |
+| `--threshold` | auto | Power-loss voltage threshold in mV (default: auto-detect 60% of VTarget) |
 | `--rtt-buffer` | `0` | RTT buffer index |
 | `--interval` | `0.01` | Poll interval (seconds) |
 
 ## Features
 
-- **Auto-reconnect** — detects target power loss via voltage monitoring and reconnects
-- **Multi J-Link** — lists all connected devices, select by serial number
-- **Timestamped logs** — new log file on each reconnect: `rtt_{chip}_{iface}_{serial}_{timestamp}.log`
-- **Console mirror** — RTT data printed to console in real time while writing to file
+### Connection & Recovery
 
-## Build EXE
+- **Auto-reconnect** — detects target power loss via voltage monitoring, waits for power on, then reconnects automatically
+- **App-jump detection** — multi-signal monitoring (VTOR, vector table SP, PC) detects when the MCU jumps to a different application and triggers reconnect
+- **RTT CB health check** — periodically validates the RTT control block; lost CB triggers reconnect
+- **Multi J-Link** — lists all connected devices, auto-selects available one or specify by serial
+- **Serial lock** — auto mode locks to the first selected J-Link for all subsequent reconnects
+
+### Logging
+
+- **Timestamped logs** — new log file per session: `logs/rtt_{chip}_{iface}_{serial}_{timestamp}.log`
+- **Log continuation** — on app-jump reconnect, resumes writing to the same log file
+- **Console mirror** — RTT data printed to console in real time with ANSI escape codes stripped
+- **Path sanitization** — log filenames are sanitized to prevent directory traversal
+
+### Voltage
+
+- **Auto-threshold** — on first connect, reads VTarget and sets power-loss threshold to 60% (minimum 500mV)
+- **Manual threshold** — override with `--threshold` for custom power-loss detection
+
+## Build
+
+### Local
 
 ```batch
 .\build.bat
 ```
 
 Output: `jlink-rttlog.exe`
+
+### CI
+
+Pushing a `v*` tag (e.g. `v0.1.0`) to `master` triggers automated build + release via GitHub Actions. The EXE is built on `windows-latest` and attached to the release.
+
+## Development
+
+```powershell
+# run tests
+venv\Scripts\python -m pytest test_jlink_rttlog.py -v
+```
+
+CI runs tests on every push to `master` and every pull request.
 
 ## Requirements
 
