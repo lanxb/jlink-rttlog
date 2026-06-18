@@ -23,6 +23,7 @@ RTT_CB_DETECTION_ATTEMPTS = 60   # 60 × 0.1s = 6s max for RTT control block
 RTT_CB_POLL_INTERVAL = 0.1       # seconds between detection attempts
 DLL_RELEASE_DELAY = 0.3          # seconds for JLinkARM.dll to release after close
 RETRY_DELAY = 2.0                # seconds between reconnect attempts
+RTT_STALE_RECHECK = 2.0         # interval for app-jump health probe
 RTT_READ_BUFFER_SIZE = 1024      # bytes per RTT read
 JLINK_WAIT_POLL_INTERVAL = 2.0   # seconds between J-Link discovery checks
 
@@ -192,6 +193,11 @@ class RttLogger:
         self._shutdown = False
         self._cleaned_up = False
         self._log_filename = None
+        self._keep_log = False   # True → reuse log file on next reconnect
+        # App-jump detection baselines (set after connect)
+        self._expected_vtor = None     # VTOR register value
+        self._expected_vt_sp = None    # vector table initial SP
+        self._reset_handler = None     # firmware reset handler (vector[1])
         self._setup_console()
 
     # -- console helpers ---------------------------------------------------
@@ -295,10 +301,10 @@ class RttLogger:
         self.jlink.connect(self.args.chip, speed=self.args.speed)
 
     def _wait_for_rtt_cb(self):
-        """Poll for the RTT control block on the target.
+        """Start RTT and poll for the control block via ``rtt_get_buf_descriptor``.
 
         Returns:
-            bool — True if the RTT subsystem is ready (or we proceed anyway),
+            bool — True if the control block was found (or we proceed anyway),
                    False if the user requested shutdown during the wait.
         """
         self.jlink.rtt_start()
@@ -306,15 +312,112 @@ class RttLogger:
             if self._should_exit():
                 return False
             try:
-                if self.jlink.rtt_get_num_up_buffers() > 0:
-                    print("RTT control block found, ready.")
-                    return True
-            except Exception as e:
-                print(f"[!] RTT probe error: {e}", file=sys.stderr)
+                self.jlink.rtt_get_buf_descriptor(0, True)
+                print("RTT control block found, ready.")
+                return True
+            except Exception:
+                pass  # not found yet — keep polling
             time.sleep(RTT_CB_POLL_INTERVAL)
 
         print("RTT control block not found, will keep trying...")
         return True  # proceed — rtt_read will retry
+
+    def _check_rtt_cb_alive(self):
+        """Quick check: is the RTT control block still accessible?
+
+        Uses ``rtt_get_buf_descriptor`` which raises if the control block
+        has moved or become invalid (e.g. after an app jump).
+        """
+        try:
+            self.jlink.rtt_get_buf_descriptor(0, True)
+            return True
+        except Exception:
+            return False
+
+    def _read_vector_word(self, vtor, offset):
+        """Read a 4-byte word from the vector table at ``vtor + offset``.
+
+        Returns the word as an int, or None on failure.
+        """
+        try:
+            data = self.jlink.memory_read(vtor + offset, 4)
+            return int.from_bytes(bytes(data), byteorder='little')
+        except Exception:
+            return None
+
+    def _read_vtor(self):
+        """Read the VTOR (Vector Table Offset Register) at 0xE000ED08.
+
+        VTOR tells us where the current vector table is in memory.
+        Available on Cortex-M3/M4/M7/M33.  Returns None on Cortex-M0
+        or if the read fails.
+        """
+        try:
+            data = self.jlink.memory_read(0xE000ED08, 4)
+            return int.from_bytes(bytes(data), byteorder='little')
+        except Exception:
+            return None
+
+    def _read_vector_sp(self, vtor):
+        """Read the initial SP from the vector table at ``vtor + 0x00``."""
+        return self._read_vector_word(vtor, 0x00)
+
+    def _read_reset_handler(self, vtor):
+        """Read the reset handler from the vector table at ``vtor + 0x04``."""
+        addr = self._read_vector_word(vtor, 0x04)
+        return addr if addr and addr != 0 else None
+
+    def _detect_app_jump(self):
+        """Check multiple signals to detect if the MCU has jumped to a
+        different application.
+
+        Signal 1 — VTOR change (most reliable on Cortex-M3/M4/M7):
+          If the vector table offset register has changed, a different
+          app has taken over.  Exact comparison, no threshold needed.
+
+        Signal 2 — Vector table SP change:
+          If the SP value at address 0x00 has changed, the vector table
+          has been overwritten by a different app.  Exact comparison.
+
+        Signal 3 — PC far from reset handler (fallback):
+          If the PC has moved very far from the firmware's entry point,
+          the MCU is executing code in a different region.  Uses a
+          generous threshold (2 MB) to avoid false positives on chips
+          with large flash.
+
+        Returns:
+            str — reason string if app jump detected, None otherwise.
+        """
+        vtor = self._read_vtor()  # read once, used by signals 1 & 2
+
+        # Signal 1: VTOR changed
+        if self._expected_vtor is not None:
+            if vtor is not None and vtor != self._expected_vtor:
+                return (f"VTOR changed"
+                        f" (0x{self._expected_vtor:08X} → 0x{vtor:08X})")
+
+        # Signal 2: Vector table SP changed
+        if vtor is not None and self._expected_vt_sp is not None:
+            vt_sp = self._read_vector_sp(vtor)
+            if vt_sp is not None and vt_sp != self._expected_vt_sp:
+                return (f"vector table changed"
+                        f" (SP 0x{self._expected_vt_sp:08X}"
+                        f" → 0x{vt_sp:08X})")
+
+        # Signal 3: PC far from firmware (fallback)
+        if self._reset_handler is not None:
+            try:
+                pc = self.jlink.register_read("PC")
+                if pc is not None:
+                    delta = abs(pc - self._reset_handler)
+                    if delta > 0x200000:  # > 2 MB from firmware entry
+                        return (f"PC=0x{pc:08X} far from firmware"
+                                f" (reset=0x{self._reset_handler:08X},"
+                                f" delta=0x{delta:X})")
+            except Exception:
+                pass  # register read can fail transiently
+
+        return None
 
     # -- main read loop ----------------------------------------------------
 
@@ -322,10 +425,18 @@ class RttLogger:
         """Inner RTT read loop.  Monitors voltage, reads RTT data, and writes
         to the log file.
 
+        Periodically checks for app jumps via VTOR, vector table SP, and PC
+        validation.  Also monitors the RTT control block health.
+
         Returns:
             bool — True if the caller should reconnect (power loss / error),
                    False if the caller should shut down.
         """
+        recheck_interval = max(1, int(RTT_STALE_RECHECK / self.args.interval))
+        cb_was_alive = False
+        ticks_since_recheck = 0
+        rtt_buf = self.args.rtt_buffer
+
         while True:
             if self._should_exit():
                 return False  # user requested shutdown
@@ -343,18 +454,46 @@ class RttLogger:
                 time.sleep(DLL_RELEASE_DELAY)
                 return True  # reconnect
 
-            # --- RTT buffer bounds check ---
-            try:
-                num_bufs = self.jlink.rtt_get_num_up_buffers()
-            except Exception:
-                num_bufs = 0
+            # --- RTT control block health check (every recheck_interval) ---
+            if ticks_since_recheck >= recheck_interval:
+                ticks_since_recheck = 0
+                alive = self._check_rtt_cb_alive()
 
-            if self.args.rtt_buffer >= num_bufs and num_bufs > 0:
-                print(f"[!] RTT buffer {self.args.rtt_buffer} out of range"
-                      f" (0–{num_bufs - 1}), falling back to buffer 0")
-                rtt_buf = 0
-            else:
-                rtt_buf = self.args.rtt_buffer
+                if cb_was_alive and not alive:
+                    # CB was reachable but now it's gone —
+                    # almost certainly an app jump or target reset
+                    print("RTT control block lost (app jump?), reconnecting...")
+                    self._disconnect()
+                    time.sleep(DLL_RELEASE_DELAY)
+                    return True  # full reconnect
+
+                if alive:
+                    if not cb_was_alive:
+                        print("RTT control block detected, reading...")
+                    cb_was_alive = True
+                    # update bounds check when we know buffers exist
+                    try:
+                        num_bufs = self.jlink.rtt_get_num_up_buffers()
+                    except Exception:
+                        num_bufs = 0
+                    if self.args.rtt_buffer >= num_bufs and num_bufs > 0:
+                        print(f"[!] RTT buffer {self.args.rtt_buffer} out of"
+                              f" range (0–{num_bufs - 1}), falling back to 0")
+                        rtt_buf = 0
+                    else:
+                        rtt_buf = self.args.rtt_buffer
+
+                # --- App jump detection ---
+                # Multi-signal check: VTOR change, vector table change,
+                # or PC far from firmware region.
+                reason = self._detect_app_jump()
+                if reason:
+                    print(f"App jump detected ({reason}), reconnecting...")
+                    self._keep_log = True
+                    self._disconnect()
+                    time.sleep(DLL_RELEASE_DELAY)
+                    return True  # full reconnect
+            ticks_since_recheck += 1
 
             # --- RTT read ---
             try:
@@ -400,12 +539,12 @@ class RttLogger:
                       f" {self.args.interface.upper()},"
                       f" {self.args.speed}kHz). Starting RTT...")
 
-                # Auto-detect voltage threshold on first connect
+                # Auto-detect voltage threshold if user didn't specify one
                 if self.args.threshold is None:
                     try:
                         v_target = self.jlink.hardware_status.voltage
                     except Exception:
-                        v_target = 3300
+                        v_target = 3300  # sensible default if read fails
                     self.args.threshold = max(500, int(v_target * 0.6))
                     print(f"VTarget={v_target}mV,"
                           f" auto-threshold={self.args.threshold}mV")
@@ -413,9 +552,36 @@ class RttLogger:
                 if not self._wait_for_rtt_cb():
                     return  # shutdown requested
 
-                self._log_filename = make_log_filename(
-                    self.args.chip, self.args.interface, serial)
-                print(f"Writing RTT log to: {self._log_filename}")
+                # Read baselines for app-jump detection.
+                self._expected_vtor = self._read_vtor()
+                self._expected_vt_sp = None
+                self._reset_handler = None
+                if self._expected_vtor is not None:
+                    self._expected_vt_sp = self._read_vector_sp(
+                        self._expected_vtor)
+                    self._reset_handler = self._read_reset_handler(
+                        self._expected_vtor)
+
+                signals = []
+                if self._expected_vtor is not None:
+                    signals.append(f"VTOR=0x{self._expected_vtor:08X}")
+                if self._expected_vt_sp is not None:
+                    signals.append(f"VT.SP=0x{self._expected_vt_sp:08X}")
+                if self._reset_handler is not None:
+                    signals.append(f"Reset=0x{self._reset_handler:08X}")
+                if signals:
+                    print(f"App-jump baseline: {', '.join(signals)}")
+                else:
+                    print("[!] Could not read vector table,",
+                          " app-jump detection limited")
+
+                if not self._keep_log:
+                    self._log_filename = make_log_filename(
+                        self.args.chip, self.args.interface, serial)
+                    print(f"Writing RTT log to: {self._log_filename}")
+                else:
+                    print(f"Reconnected, continuing: {self._log_filename}")
+                self._keep_log = False
 
                 should_reconnect = self._read_loop()
                 if not should_reconnect:
@@ -458,9 +624,11 @@ if __name__ == "__main__":
             except ValueError as e:
                 print(f"[!] {e}")
                 if args.serial is not None:
+                    # Specified mode: keep waiting for the target serial
                     print(f"Retrying for serial={args.serial}...\n")
                     time.sleep(RETRY_DELAY)
                     continue
+                # Auto mode shouldn't reach here, but safety fallback
                 print("No emulators available, retrying...\n")
                 time.sleep(RETRY_DELAY)
 
