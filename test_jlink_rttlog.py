@@ -94,7 +94,7 @@ class TestParseArgs:
             assert args.interface == 'swd'
             assert args.chip == 'GD32F303VG'
             assert args.speed == 4000
-            assert args.threshold == 500
+            assert args.threshold is None  # auto-detect on connect
             assert args.rtt_buffer == 0
             assert args.interval == 0.01
 

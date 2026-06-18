@@ -91,8 +91,9 @@ examples:
                         help='target chip name (default: GD32F303VG)')
     parser.add_argument('--speed', type=int, default=4000,
                         help='interface speed in kHz (default: 4000)')
-    parser.add_argument('--threshold', type=int, default=500,
-                        help='power-loss voltage threshold in mV (default: 500)')
+    parser.add_argument('--threshold', type=int, default=None,
+                        help='power-loss voltage threshold in mV'
+                             ' (default: auto-detect 60%% of VTarget)')
     parser.add_argument('--rtt-buffer', type=int, default=0,
                         help='RTT buffer index (default: 0)')
     parser.add_argument('--interval', type=float, default=0.01,
@@ -102,7 +103,7 @@ examples:
     # validate argument ranges
     if args.speed < 1:
         parser.error('--speed must be >= 1 kHz')
-    if args.threshold < 0:
+    if args.threshold is not None and args.threshold < 0:
         parser.error('--threshold must be >= 0 mV')
     if args.interval <= 0:
         parser.error('--interval must be > 0 seconds')
@@ -398,6 +399,16 @@ class RttLogger:
                 print(f"Connected ({self.args.chip},"
                       f" {self.args.interface.upper()},"
                       f" {self.args.speed}kHz). Starting RTT...")
+
+                # Auto-detect voltage threshold on first connect
+                if self.args.threshold is None:
+                    try:
+                        v_target = self.jlink.hardware_status.voltage
+                    except Exception:
+                        v_target = 3300
+                    self.args.threshold = max(500, int(v_target * 0.6))
+                    print(f"VTarget={v_target}mV,"
+                          f" auto-threshold={self.args.threshold}mV")
 
                 if not self._wait_for_rtt_cb():
                     return  # shutdown requested
