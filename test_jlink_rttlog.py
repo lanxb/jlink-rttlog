@@ -145,10 +145,11 @@ class TestSelectJlink:
         result = jl.select_jlink(emulators, None)
         assert result == 999
 
-    def test_not_found_falls_back_to_first(self, capsys):
+    def test_not_found_raises_valueerror(self):
+        """Specified serial not found → ValueError, no fallback."""
         emulators = [_FakeEmulator(100), _FakeEmulator(200)]
-        result = jl.select_jlink(emulators, 999)
-        assert result == 100  # falls back to first
+        with pytest.raises(ValueError, match='999'):
+            jl.select_jlink(emulators, 999)
 
 
 # ---------------------------------------------------------------------------

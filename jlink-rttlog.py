@@ -112,15 +112,21 @@ examples:
     return args
 
 
-def select_jlink(emulators, target_serial):
+def select_jlink(emulators, target_serial, jlink=None):
     """Select a J-Link by serial number, or auto-pick the first available.
+
+    In *specified mode* (target_serial is not None): returns the matching
+    serial or raises ValueError so the caller can wait/retry.
+
+    In *auto mode* (target_serial is None): iterates through emulators,
+    skipping any that are already opened by another process (detected via
+    a quick open/close probe).  Returns the first available serial, or
+    raises ValueError if all are occupied.
 
     Args:
         emulators: list of connected emulator objects from pylink.
         target_serial: int | None — desired serial number.
-
-    Returns:
-        int — the serial number of the selected emulator.
+        jlink: optional pylink.JLink instance for availability probing.
     """
     if target_serial is not None:
         matched = [e for e in emulators if e.SerialNumber == target_serial]
@@ -128,11 +134,28 @@ def select_jlink(emulators, target_serial):
             serial = matched[0].SerialNumber
             print(f"Selected J-Link (serial={serial})\n")
             return serial
-        print(f"[!] J-Link serial={target_serial} not found, using first available")
+        raise ValueError(
+            f"J-Link serial={target_serial} not found. "
+            f"Available: {[e.SerialNumber for e in emulators]}"
+        )
 
-    serial = emulators[0].SerialNumber
-    print(f"Auto-selected J-Link (serial={serial})\n")
-    return serial
+    # Auto mode: try each emulator, skip occupied ones
+    for emu in emulators:
+        serial = emu.SerialNumber
+        if jlink is not None:
+            try:
+                jlink.open(serial_no=serial)
+                jlink.close()
+            except Exception as e:
+                msg = str(e).lower()
+                if 'already open' in msg or 'in use' in msg:
+                    print(f"  Skipping occupied J-Link serial={serial}")
+                    continue
+                raise
+        print(f"Auto-selected J-Link (serial={serial})\n")
+        return serial
+
+    raise ValueError("All J-Link devices are occupied")
 
 
 def make_log_filename(chip, interface, serial_number):
@@ -403,17 +426,33 @@ if __name__ == "__main__":
     logger = RttLogger(args)
 
     try:
-        emulators = logger.list_emulators()
-        while not emulators:
-            if logger._should_exit():
-                print("\nCancelled.")
-                logger._cleanup()
-                sys.exit(0)
-            print("Waiting for J-Link... (Ctrl+C to exit)")
-            time.sleep(JLINK_WAIT_POLL_INTERVAL)
+        while True:
             emulators = logger.list_emulators()
+            while not emulators:
+                if logger._should_exit():
+                    print("\nCancelled.")
+                    logger._cleanup()
+                    sys.exit(0)
+                print("Waiting for J-Link... (Ctrl+C to exit)")
+                time.sleep(JLINK_WAIT_POLL_INTERVAL)
+                emulators = logger.list_emulators()
 
-        serial = select_jlink(emulators, args.serial)
+            try:
+                serial = select_jlink(emulators, args.serial,
+                                     jlink=logger.jlink)
+                # Auto mode: lock to the selected serial for all reconnects
+                if args.serial is None:
+                    args.serial = serial
+                break  # serial found, proceed
+            except ValueError as e:
+                print(f"[!] {e}")
+                if args.serial is not None:
+                    print(f"Retrying for serial={args.serial}...\n")
+                    time.sleep(RETRY_DELAY)
+                    continue
+                print("No emulators available, retrying...\n")
+                time.sleep(RETRY_DELAY)
+
         logger.run(serial)
     except KeyboardInterrupt:
         print("\nInterrupted.")
