@@ -7,19 +7,10 @@ isolation.
 
 import os
 import sys
-import importlib.util
 from unittest.mock import patch
 
 import pytest
-
-# The source file is named jlink-rttlog.py (hyphen — not a valid Python
-# identifier), so we load it via importlib.
-_MODULE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            'jlink-rttlog.py')
-_spec = importlib.util.spec_from_file_location('jlink_rttlog', _MODULE_PATH)
-jl = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(jl)
-
+import jlink_rttlog as jl
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -159,7 +150,7 @@ class TestSelectJlink:
 class TestMakeLogFilename:
     def test_sanitized_components(self):
 
-        with patch.object(jl, 'LOG_DIR', '/fake/logs'):
+        with patch.object(jl, 'LOG_DIR', '/tmp/fake/logs'):
             filename = jl.make_log_filename(
                 chip="../../../evil",
                 interface="swd",
@@ -170,9 +161,9 @@ class TestMakeLogFilename:
             assert "\\" not in os.path.basename(filename)
             # resolved path stays within LOG_DIR
             assert os.path.abspath(filename).startswith(
-                os.path.abspath("/fake/logs"))
+                os.path.abspath("/tmp/fake/logs"))
             # starts with LOG_DIR
-            assert filename.startswith("/fake/logs")
+            assert filename.startswith("/tmp/fake/logs")
             # contains expected parts
             basename = os.path.basename(filename)
             assert basename.startswith("rtt_")
