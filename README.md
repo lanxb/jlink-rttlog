@@ -1,6 +1,14 @@
 # J-Link RTT Logger
 
+[![Build & Release](https://github.com/lanxb/jlink-rttlog/actions/workflows/build.yml/badge.svg)](https://github.com/lanxb/jlink-rttlog/actions/workflows/build.yml)
+
 RTT log capture with auto-reconnect on target power loss. Prints to console and writes to timestamped log files.
+
+## Download
+
+Pre-built EXE available on the [Releases](https://github.com/lanxb/jlink-rttlog/releases) page.
+
+> Requires Segger J-Link Software Pack installed on the target machine.
 
 ## Quick Start
 
@@ -41,13 +49,28 @@ jlink-rttlog.py [-h] [-s SERIAL] [-i {swd,jtag}] [-c CHIP]
 - **Timestamped logs** — new log file on each reconnect: `rtt_{chip}_{iface}_{serial}_{timestamp}.log`
 - **Console mirror** — RTT data printed to console in real time while writing to file
 
-## Build EXE
+## Build
+
+### Local
 
 ```batch
 .\build.bat
 ```
 
 Output: `jlink-rttlog.exe`
+
+### CI
+
+Pushing a `v*` tag (e.g. `v0.1.0`) to `master` triggers automated build + release via GitHub Actions. The EXE is built on `windows-latest` and attached to the release.
+
+## Development
+
+```powershell
+# run tests
+venv\Scripts\python -m pytest test_jlink_rttlog.py -v
+```
+
+CI runs tests on every push to `master` and every pull request.
 
 ## Requirements
 
