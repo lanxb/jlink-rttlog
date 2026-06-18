@@ -38,16 +38,31 @@ jlink-rttlog.py [-h] [-s SERIAL] [-i {swd,jtag}] [-c CHIP]
 | `-i`, `--interface` | `swd` | Target interface: `swd` or `jtag` |
 | `-c`, `--chip` | `GD32F303VG` | Target chip name |
 | `--speed` | `4000` | Interface speed (kHz) |
-| `--threshold` | `500` | Power-loss voltage threshold (mV) |
+| `--threshold` | auto | Power-loss voltage threshold in mV (default: auto-detect 60% of VTarget) |
 | `--rtt-buffer` | `0` | RTT buffer index |
 | `--interval` | `0.01` | Poll interval (seconds) |
 
 ## Features
 
-- **Auto-reconnect** — detects target power loss via voltage monitoring and reconnects
-- **Multi J-Link** — lists all connected devices, select by serial number
-- **Timestamped logs** — new log file on each reconnect: `rtt_{chip}_{iface}_{serial}_{timestamp}.log`
-- **Console mirror** — RTT data printed to console in real time while writing to file
+### Connection & Recovery
+
+- **Auto-reconnect** — detects target power loss via voltage monitoring, waits for power on, then reconnects automatically
+- **App-jump detection** — multi-signal monitoring (VTOR, vector table SP, PC) detects when the MCU jumps to a different application and triggers reconnect
+- **RTT CB health check** — periodically validates the RTT control block; lost CB triggers reconnect
+- **Multi J-Link** — lists all connected devices, auto-selects available one or specify by serial
+- **Serial lock** — auto mode locks to the first selected J-Link for all subsequent reconnects
+
+### Logging
+
+- **Timestamped logs** — new log file per session: `logs/rtt_{chip}_{iface}_{serial}_{timestamp}.log`
+- **Log continuation** — on app-jump reconnect, resumes writing to the same log file
+- **Console mirror** — RTT data printed to console in real time with ANSI escape codes stripped
+- **Path sanitization** — log filenames are sanitized to prevent directory traversal
+
+### Voltage
+
+- **Auto-threshold** — on first connect, reads VTarget and sets power-loss threshold to 60% (minimum 500mV)
+- **Manual threshold** — override with `--threshold` for custom power-loss detection
 
 ## Build
 
