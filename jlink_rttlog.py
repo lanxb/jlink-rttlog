@@ -7,9 +7,13 @@ timestamped log files, and real-time console mirror.
 
 import argparse
 import ctypes
-import msvcrt
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 import os
 import re
+import select
 import sys
 import pylink
 import time
@@ -231,14 +235,25 @@ class RttLogger:
     def _should_exit(self):
         """Return True when the user has requested shutdown.
 
-        Checks the shutdown flag (set by the console close handler)
-        and the console input buffer for Ctrl+C / Ctrl+Z.
+        Checks the shutdown flag (set by the console close handler on
+        Windows) and the console input buffer for Ctrl+C / Ctrl+Z on
+        Windows, or any keypress on POSIX.
         """
         if self._shutdown:
             return True
-        if not msvcrt.kbhit():
+        if msvcrt:
+            # Windows: check for Ctrl+C / Ctrl+Z via msvcrt kbhit
+            if msvcrt.kbhit():
+                return msvcrt.getch() in (b'\x03', b'\x1a')
             return False
-        return msvcrt.getch() in (b'\x03', b'\x1a')
+        # POSIX: non-blocking check for any stdin input (any key = exit)
+        if select.select([sys.stdin], [], [], 0)[0]:
+            try:
+                sys.stdin.read(1)
+            except Exception:
+                pass
+            return True
+        return False
 
     # -- J-Link lifecycle --------------------------------------------------
 

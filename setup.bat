@@ -30,6 +30,6 @@ pip install -r requirements.txt
 echo.
 echo [OK] Setup complete.
 echo.
-echo Run the script:  python jlink-rttlog.py
+echo Run the script:  python jlink_rttlog.py
 echo Build EXE:        build.bat
 pause
