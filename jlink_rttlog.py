@@ -13,6 +13,7 @@ except ImportError:
     msvcrt = None
 import os
 import re
+import select
 import sys
 import pylink
 import time
@@ -246,7 +247,6 @@ class RttLogger:
                 return msvcrt.getch() in (b'\x03', b'\x1a')
             return False
         # POSIX: non-blocking check for any stdin input (any key = exit)
-        import select
         if select.select([sys.stdin], [], [], 0)[0]:
             try:
                 sys.stdin.read(1)
