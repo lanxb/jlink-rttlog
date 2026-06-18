@@ -21,7 +21,7 @@ if exist "jlink-rttlog.exe" del /q "jlink-rttlog.exe"
 
 :: Build
 echo [*] Building jlink-rttlog.exe...
-python -m PyInstaller --onefile --name jlink-rttlog --distpath . jlink-rttlog.py
+python -m PyInstaller --onefile --name jlink-rttlog --distpath . jlink_rttlog.py
 
 if errorlevel 1 (
     echo [!] Build failed!
